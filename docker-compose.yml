@@ -1,0 +1,72 @@
+version: "3.9"
+
+networks:
+  net_chatwoot:
+    driver: bridge
+
+volumes:
+  pg_chatwoot:
+  redis_chatwoot:
+
+services:
+  db:
+#    image: postgres:14
+    image: pgvector/pgvector:pg14
+    platform: linux/arm64
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chatwoot_production
+    volumes:
+      - pg_chatwoot:/var/lib/postgresql/data
+    networks: [net_chatwoot]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot_production"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:6
+    platform: linux/arm64
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_chatwoot:/data
+    networks: [net_chatwoot]
+
+  rails:
+    image: chatwoot/chatwoot:latest
+    platform: linux/arm64
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    env_file:
+      - .env
+    environment:
+      RAILS_ENV: production
+    ports:
+      - "127.0.0.1:3000:3000"   # local-only; Apache will proxy to this
+    command: >
+      sh -lc "
+      bundle exec rails db:prepare &&
+      bundle exec rails s -p 3000 -b 0.0.0.0
+      "
+    networks: [net_chatwoot]
+    restart: unless-stopped
+
+  sidekiq:
+    image: chatwoot/chatwoot:latest
+    platform: linux/arm64
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    env_file:
+      - .env
+    environment:
+      RAILS_ENV: production
+    command: >
+      sh -lc "
+      bundle exec sidekiq -C config/sidekiq.yml
+      "
+    networks: [net_chatwoot]
+    restart: unless-stopped
