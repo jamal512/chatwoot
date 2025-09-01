@@ -1,0 +1,86 @@
+name: Build front-end assets
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, develop, feat/** ]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    env:
+      RAILS_ENV: production
+      NODE_OPTIONS: --max_old_space_size=4096
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Ruby
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.4.4
+          bundler-cache: true
+
+      # Node + pnpm (Chatwoot uses pnpm)
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: true
+
+      - name: Print versions
+        run: |
+          node -v
+          pnpm -v
+          bundle -v
+          ruby -v
+
+      # Precompile assets (Vite + Rails)
+      - name: Precompile assets
+        run: |
+          bundle exec rails assets:precompile
+
+      # Upload just the built output so the repo stays clean
+      - name: Upload compiled assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-vite
+          path: public/vite
+          if-no-files-found: error
+
+  # OPTIONAL: deploy to your Pi if you add SSH secrets
+  deploy:
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && secrets.PI_HOST && secrets.PI_USER && secrets.PI_PATH && secrets.SSH_PRIVATE_KEY }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download compiled assets
+        uses: actions/download-artifact@v4
+        with:
+          name: public-vite
+          path: public/vite
+
+      - name: Install rsync + ssh client
+        run: sudo apt-get update && sudo apt-get install -y rsync openssh-client
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Copy assets to server
+        run: |
+          rsync -avz --delete public/vite/ ${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}:${{ secrets.PI_PATH }}/public/vite/
+
+      - name: Restart service
+        run: |
+          ssh ${{ secrets.PI_USER }}@${{ secrets.PI_HOST }} "sudo systemctl restart chatwoot-ext && systemctl is-active chatwoot-ext"
