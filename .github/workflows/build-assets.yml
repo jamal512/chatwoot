@@ -2,8 +2,6 @@ name: Build front-end assets
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main, develop, feat/** ]
 
 jobs:
   build:
